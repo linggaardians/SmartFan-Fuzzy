@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dasbor Kipas Cerdas AI</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      background-color: #f4f4f4;
+    }
+
+    .dashboard {
+      text-align: center;
+      padding: 20px;
+      background: white;
+      border-radius: 10px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    }
+
+    .card {
+      display: inline-block;
+      margin: 10px;
+      padding: 15px;
+      width: 200px;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .card h3 {
+      margin: 0;
+      color: #2ecc71;
+      font-size: 16px;
+    }
+
+    .card p {
+      margin: 10px 0 0;
+      font-size: 24px;
+      color: #333;
+    }
+
+    .fan-speed .options button {
+      margin: 5px;
+      padding: 5px 10px;
+      border: none;
+      background: #3498db;
+      color: white;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+
+    .fan-speed .options button:hover {
+      background: #2980b9;
+    }
+
+    .ai-recommendation button {
+      margin-top: 10px;
+      padding: 10px 20px;
+      border: none;
+      background: #3498db;
+      color: white;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+
+    .ai-recommendation button:hover {
+      background: #2980b9;
+    }
+
+    .error {
+      color: red;
+      font-size: 14px;
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="dashboard">
+    <h1>Dasbor Kipas Cerdas AI</h1>
+    <div class="card">
+      <h3>Suhu <span>Data suhu real-time</span></h3>
+      <p id="temperature">0.0°C</p>
+    </div>
+    <div class="card">
+      <h3>Kelembapan <span>Data kelembapan real-time</span></h3>
+      <p id="humidity">0%</p>
+    </div>
+    <div class="card">
+      <h3>Keberadaan <span>Status keberadaan manusia real-time</span></h3>
+      <p id="presence">Tidak Terdeteksi</p>
+    </div>
+    <div class="card fan-speed">
+      <h3>Kecepatan Kipas <span>Kontrol kecepatan kipas saat ini</span></h3>
+      <p id="fanSpeed">0%</p>
+      <div class="options">
+        <button onclick="setFanSpeed(0)">0%</button>
+        <button onclick="setFanSpeed(25)">25%</button>
+        <button onclick="setFanSpeed(50)">50%</button>
+        <button onclick="setFanSpeed(75)">75%</button>
+        <button onclick="setFanSpeed(100)">100%</button>
+      </div>
+    </div>
+    <div class="card ai-recommendation">
+      <h3>
+        Rekomendasi AI
+        <span>Kecepatan kipas yang direkomendasikan oleh AI</span>
+      </h3>
+      <p id="aiRecommendation">0%</p>
+      <button onclick="applyAISpeed()">Terapkan Kecepatan AI</button>
+    </div>
+    <p class="error" id="errorMsg">
+      Gagal terhubung ke ESP32. Periksa IP atau jaringan.
+    </p>
+  </div>
+
+  <script>
+    const esp32IP = "192.168.169.1";
+    const errorMsg = document.getElementById("errorMsg");
+
+    function fetchData() {
+      fetch("http://" + esp32IP + "/data")
+        .then(response => {
+          if (!response.ok) {
+            throw new Error("Kesalahan HTTP! Status: " + response.status);
+          }
+          return response.json(); // Sudah berupa objek, tidak perlu parse lagi
+        })
+        .then(data => {
+          errorMsg.style.display = "none";
+          document.getElementById("temperature").textContent = data.temperature + "°C";
+          document.getElementById("humidity").textContent = data.humidity + "%";
+          document.getElementById("presence").textContent = data.presence ? "Terdeteksi" : "Tidak Terdeteksi";
+
+          let recommendedSpeed = fuzzyLogic(data.temperature, data.humidity, data.presence);
+          document.getElementById("aiRecommendation").textContent = recommendedSpeed + "%";
+        })
+        .catch(error => {
+          console.error("Gagal mengambil data:", error);
+          errorMsg.style.display = "block";
+          document.getElementById("temperature").textContent = "0.0°C";
+          document.getElementById("humidity").textContent = "0%";
+          document.getElementById("presence").textContent = "Tidak Terdeteksi";
+          document.getElementById("aiRecommendation").textContent = "0%";
+        });
+    }
+
+    // Fungsi trapmf (trapezoidal membership function)
+    function trapmf(x, [a, b, c, d]) {
+      if (x <= a || x >= d) return 0;
+      if (x >= b && x <= c) return 1;
+      if (x > a && x < b) return (x - a) / (b - a);
+      if (x > c && x < d) return (d - x) / (d - c);
+      return 0;
+    }
+
+    // Fungsi trimf (triangular membership function)
+    function trimf(x, [a, b, c]) {
+      if (x <= a || x >= c) return 0;
+      if (x === b) return 1;
+      if (x > a && x < b) return (x - a) / (b - a);
+      if (x > b && x < c) return (c - x) / (c - b);
+      return 0;
+    }
+
+    // Definisikan fuzzy sets suhu (°C)
+    const tempFuzzySets = {
+      cold: (x) => trapmf(x, [-Infinity, -Infinity, 15, 20]),
+      warm: (x) => trimf(x, [18, 25, 32]),
+      hot: (x) => trapmf(x, [28, 35, Infinity, Infinity]),
+    };
+
+    // Definisikan fuzzy sets kelembapan (%)
+    const humFuzzySets = {
+      low: (x) => trapmf(x, [-Infinity, -Infinity, 30, 50]),
+      medium: (x) => trimf(x, [40, 60, 80]),
+      high: (x) => trapmf(x, [70, 85, Infinity, Infinity]),
+    };
+
+    // Definisikan fuzzy sets kecepatan kipas (%)
+    const fanSpeedFuzzySets = {
+      off: (x) => trapmf(x, [-Infinity, -Infinity, 0, 5]),
+      slow: (x) => trimf(x, [0, 25, 50]),
+      medium: (x) => trimf(x, [30, 50, 70]),
+      fast: (x) => trimf(x, [60, 85, 100]),
+      max: (x) => trapmf(x, [85, 95, 100, 100]),
+    };
+
+    // Rules fuzzy logic (temperature & humidity)
+    const rules = [
+      { temp: "cold", hum: null, speed: "slow" },
+      { temp: "warm", hum: "low", speed: "slow" },
+      { temp: "warm", hum: "medium", speed: "medium" },
+      { temp: "warm", hum: "high", speed: "medium" },
+      { temp: "hot", hum: "low", speed: "medium" },
+      { temp: "hot", hum: "medium", speed: "fast" },
+      { temp: "hot", hum: "high", speed: "max" },
+    ];
+
+    // Fungsi utama fuzzy logic
+    function fuzzyLogic(temp, hum, presence) {
+      // Hitung derajat keanggotaan input suhu
+      const tempDeg = {};
+      for (const key in tempFuzzySets) {
+        tempDeg[key] = tempFuzzySets[key](temp);
+      }
+
+      // Hitung derajat keanggotaan input kelembapan
+      const humDeg = {};
+      for (const key in humFuzzySets) {
+        humDeg[key] = humFuzzySets[key](hum);
+      }
+
+      // Atur aturan fuzzy logic (rules)
+      const rules = [
+        { temp: "cold", hum: null, speed: "slow" },
+        { temp: "warm", hum: "low", speed: "slow" },
+        { temp: "warm", hum: "medium", speed: "medium" },
+        { temp: "warm", hum: "high", speed: "medium" },
+        { temp: "hot", hum: "low", speed: "medium" },
+        { temp: "hot", hum: "medium", speed: "fast" },
+        { temp: "hot", hum: "high", speed: "max" },
+      ];
+
+      // Hitung kekuatan tiap rule (firing strength)
+      const ruleResults = [];
+      for (const r of rules) {
+        const tDeg = r.temp ? tempDeg[r.temp] : 1;
+        const hDeg = r.hum ? humDeg[r.hum] : 1;
+        const strength = Math.min(tDeg, hDeg);
+        if (strength > 0) {
+          ruleResults.push({ speed: r.speed, strength });
+        }
+      }
+
+      // Jika tidak ada rule aktif, default ke 'off'
+      if (ruleResults.length === 0) {
+        ruleResults.push({ speed: "off", strength: 1 });
+      }
+
+      // Definisikan nilai crisp untuk tiap kategori kecepatan kipas
+      const speedValues = {
+        off: 0,
+        slow: 25,
+        medium: 50,
+        fast: 75,
+        max: 100,
+      };
+
+      // Defuzzifikasi dengan metode weighted average (centroid)
+      let numerator = 0;
+      let denominator = 0;
+      for (const rr of ruleResults) {
+        numerator += speedValues[rr.speed] * rr.strength;
+        denominator += rr.strength;
+      }
+
+      const crispSpeed = denominator === 0 ? 0 : numerator / denominator;
+
+      // Bulatkan hasil dan kembalikan
+      return Math.round(crispSpeed);
+    }
+
+    // Agregasi output (max strength per kat
+
+    function setFanSpeed(speed) {
+      fetch("http://" + esp32IP + "/setFanSpeed", {
+        method: "POST",
+        body: speed,
+        headers: { "Content-Type": "text/plain" }
+      })
+        .then(response => {
+          if (response.ok) {
+            document.getElementById("fanSpeed").textContent = speed + "%";
+          } else {
+            throw new Error("Gagal mengatur kecepatan kipas");
+          }
+        })
+        .catch(error => {
+          console.error("Gagal mengatur kecepatan kipas:", error);
+          errorMsg.style.display = "block";
+        });
+    }
+
+    function applyAISpeed() {
+      let speed = parseInt(document.getElementById("aiRecommendation").textContent);
+      setFanSpeed(speed);
+      document.getElementById("fanSpeed").textContent = speed + "%";
+    }
+
+    setInterval(fetchData, 2000);
+    fetchData();
+  </script>
+</body>
+
+</html>
